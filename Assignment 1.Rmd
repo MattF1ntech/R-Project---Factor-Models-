@@ -1,0 +1,346 @@
+---
+title: "Assignment 1"
+author: "Matthew Elder"
+date: "2025-03-29"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+if (!requireNamespace("formatR", quietly = TRUE)) {
+  install.packages("formatR")
+}
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(readxl)
+library(quantmod)
+library(ggplot2)
+library(ggthemes)
+library(e1071)
+library(stargazer)
+library(dbplyr)
+library(moments)
+library(knitr)
+library(tseries)
+library(PortfolioAnalytics)
+library(fPortfolio)
+```
+
+# Task 1 
+
+## 1.1 REA Company Profile
+
+REA Group, established in 1995 and based in Melbourne, Australia’s a worldwide known leader in digital real estate advertising including realestete.com.au, offering services such as property listings, data analysis, market insights and mortgage services, catering to residential, commercial and client-side developments. REAs digital empire is designed to simplify the property journey and connect consumers with property professionals (Hayes 2024).
+Internationally, REA Group has expanded its business endeavors through strategic investment in companies such as Housing.com in India, Casa in Italy and Move, Inc in the U.S, operating Realtor.com. The company is looking to invest into AI automation and acquisitions such as Realtair to enhance their customer experience, simplifying property decisions and dominating the Australian market, while looking towards global growth (Hayes 2024).
+For the financial year ending June 30 2024, REA Group reported a strong performance, consisting of a revenue of $1,677 million, recently growing due to residential listing and offerings. Net profit after tax was $302.7 million, reflecting strong operational performance and increased advertising demand. Total assets stood at $2,688.5 million, while total liabilities amounted to $1,139.7 million, showcasing a strong balance sheet and a great financial position to accommodate to future expansion and technological innovation.
+
+
+## 1.2 Simple Arithmetic and Continuous Log Returns
+
+### Simple Returns
+
+```{r, fig.width=8, fig.height=4, dpi=200, echo=FALSE}
+REA = read_excel("REA_Price_History.xlsx")
+All_Ordinaries = read_excel("All_Ordinaries_Index.xlsx")
+
+REA$Date = as.Date(REA$Date)
+All_Ordinaries$Date = as.Date(All_Ordinaries$Date)
+
+
+ret1_REA = diff(log(REA$Price))
+ret1_ALLOrdinaries = diff(log(All_Ordinaries$Price))
+
+ret1 = data.frame(
+  Date = REA$Date[-1],
+  REA = as.numeric(ret1_REA),
+  Index = as.numeric(ret1_ALLOrdinaries)
+)
+
+head(ret1)
+
+ret2 = cbind(ret1$REA, ret1$Index)
+
+ggplot(ret1, aes(x = Date)) + 
+  geom_line(aes(y = REA, color = "REA")) + 
+  geom_line(aes(y = Index, color = "Index")) + 
+  labs(title = "Weekly Log Returns", x = "Date", y = "Log Returns") + 
+  theme_minimal() +
+  scale_color_manual(values = c("blue", "red"), name = "Series")
+```
+
+#### Log Returns
+
+```{r, fig.width=8, fig.height=4, dpi=200, echo=FALSE}
+REA_Summary = summary(ret1_REA)
+sd_REA = sd(ret1$REA)
+skew_REA = skewness(ret1$REA)
+kurt_REA = kurtosis(ret1$REA)
+percentiles_REA = quantile(ret1$REA, probs = c(0.25, 0.75))
+
+Index_Summary = summary(ret1$Index)
+sd_Index = sd(ret1$Index)
+skew_Index = skewness(ret1$Index)
+kurt_Index = kurtosis(ret1$Index)
+percentiles_Index = quantile(ret1$Index, probs = c(0.25, 0.75))
+
+stats = data.frame(
+  Statistic = c("Mean", "Median", "Min", "Max", "Standard Deviation", "Skewness", "Kurtosis", "25th Percentile", "75th Percentile"),
+  REA = c(mean(ret1$REA), median(ret1$REA), min(ret1$REA), max(ret1$REA), sd_REA, skew_REA, kurt_REA, percentiles_REA[1], percentiles_REA[2]), Index = c(mean(ret1$Index), median(ret1$Index), min(ret1$Index), max(ret1$Index), sd_Index, skew_Index, kurt_Index, percentiles_Index[1], percentiles_Index[2])
+)
+
+print(stats)
+```
+### Discussion 
+The table shows descriptive statistic for the weekly log returns of REA Group and the All Ordinaries. REA’s mean return is 0.0030, slightly higher than the All Ordinaries, portraying a better average performance. However, REA demonstrates a more volatile with its standard deviation (0.0437 vs 0.0224) as well as a wider range (min -0.2047, max 0.1799 vs -0.1412, 0.0631). REA Groups skewness (-0.3465) suggest a mild left tail, while The All Ordinaries (-1.8761) indicating a stronger negative skew. The all Ordinaries carries a higher Kurtosis (9.7338 vs 2.9498), suggesting that there is a higher probability of outliers.
+
+# Task 2 
+
+## 2.1 CAPM/Single Index Model 
+
+#### Plot Regression Diagnostics 
+
+```{r}
+rf = read_excel("90_Day_Accepted_Bill.xlsx")
+
+rf_annual = rf$'Last' / 100
+rf_weekly = rf_annual / 52
+
+reg_REA = ret1_REA - rf_weekly
+reg_Index = ret1_ALLOrdinaries - rf_weekly
+
+CAPM_model = lm(reg_REA ~ reg_Index)
+
+summary(CAPM_model)
+
+plot(CAPM_model)
+
+ggplot(data = data.frame(reg_Index, reg_REA), aes(x = reg_Index, y = reg_REA)) +
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "CAPM Regression: REA vs Market", x = "Excess Market Return", y = "Excess REA Return") +
+  theme_minimal()
+```
+
+### Overview of Systematic Risk
+The regression model outputs the systematic risk for REA stock against the All Ordinaries via the beta coefficient, estimated at 1.2901. this indicates that the stocks returns are 1.29 times more volatile than the market, suggesting above average systematic risk. The intercept (0.0074) is statistically significant (p = 0.0048), implying a positive excess return independent of the market. The R-Squared value of 0.4393 indicates that 43.94%of the stocks variability is explained by the market movement, while the remaining portion stems from unsystematic influences. 
+
+## 2.2 Fama-French
+
+#### Linear Regression Model
+
+```{r}
+REA = read_excel("REA_Price_History.xlsx")
+All_Ordinaries = read_excel("All_Ordinaries_Index.xlsx")
+Small_Cap = read_excel("Small_Cap_Index.xlsx")
+Large_Cap = read_excel("Large_Cap_Index.xlsx")
+Value = read_excel("Australia_Value_Index.xlsx")
+Growth = read_excel("Australia_Growth_Index.xlsx")
+
+REA$Date = as.Date(REA$Date)
+All_Ordinaries$Date = as.Date(All_Ordinaries$Date)
+Small_Cap$Date = as.Date(Small_Cap$Date)
+Large_Cap$Date = as.Date(Large_Cap$Date)
+Value$Date = as.Date(Value$Date)
+Growth$Date = as.Date(Value$Date)
+
+REA = REA[-1, , drop = FALSE]
+
+ret_REA = diff(log(REA$Price))
+ret_ALLOrdinaries = diff(log(All_Ordinaries$Price))
+ret_SmallCap = diff(log(Small_Cap$Price))
+ret_LargeCap = diff(log(Large_Cap$Price))
+ret_Value = diff(log(Value$Price))
+ret_Growth = diff(log(Growth$Price))
+
+ExcessREA = ret1_REA - rf_weekly
+ExcessIndex = ret1_ALLOrdinaries - rf_weekly
+
+SMB = ret_SmallCap - ret_LargeCap
+HML = ret_Value - ret_Growth
+
+ExcessREA <- ExcessREA[1:length(SMB)]
+ExcessIndex <- ExcessIndex[1:length(SMB)]
+
+FF = data.frame(
+  Date = REA$Date,
+  ExcessREA = as.numeric(ExcessREA),
+  ExcessIndex = as.numeric(ExcessIndex),
+  SMB = as.numeric(SMB),
+  HML = as.numeric(HML)
+)
+
+print(FF)
+```
+
+### Overview of Farma-French Three Factor Model 
+
+Fama French Three Factor Model, developed by Eugene Fama and Kenneth French expands on the capital asset pricing model (CAPM) by incorporating size risk (SMB) and value risk (HML) factors, whilst pairing it with market risk factors (β) to explain stock returns. 
+The model assumes strong market efficiency and systematic risk can be expressed through the key factors, due to public information such as excess risk and high cost of capital. Critics argue the model experiences inefficiencies with behavioural bias; however, this has been challenged by Daniel and Titman (1997) stating characteristics are proxies for non-diversifiable factor risk. Furthermore, the model portrays SMB and HML as consistent, however their performances vary, reducing its predictive power (Fama & French, 2012).  
+The model expects linear relationship impacts. Non linear effects like momentum are not accounted for, leading to models that extend the Fama and French Three Factor model such as the Carhart Four Factor Model (Carhart, 1997). Fama and French highlights the model is able to showcase 95% of diverse portfolio returns, driven by market size and value stocks, measured by book to value ratio. Investors can target expected returns based on these risks.
+In summary, the Fama French model accounts for a significant advancement in asset pricing, however limitations can be seen to weaken the explanatory power and mispricing views.
+Regression Coefficients as Risk Models
+Introduction  
+The dataset provides weekly returns for REA Group (ExcessREA), the market index (ExcessIndex), SMB and HML from January 2020 to December 2024, pairing it with the descriptive statistics and CAPM regression output. Using the Fama French Three Factor Model (ExcessREA = α + β·ExcessIndex + s·SMB + h·HML + ε), this analysis evaluates the coefficients (α, β, s, h) as risk factors for REA, identifying the most significant coefficients and analysing their individual significant. The insigts are taken from REAs return patterns and Fama French theory (Fama French), producing implications that benefit risk and investment strategies. 
+Significant Coefficients
+REA’s excess returns show high volatility, often aligning with the market index. This suggests an insignificant α, indicating returns are largely notable by the risk factors, consistent with the market efficiency. A significant positive α would imply REA is achieving higher returns than the benchmark, make it a more attractive investment.
+REA’s returns track the market index closely (e.g., -0.1671 vs -0.1238 in February 2020) suggesting a significant β. A significant β means REA increases the volume of market movements, boosting gains in upswings but raising downside risk.
+As a large tech / real estate firm, REA as an insignificant SMB (e.g., 0.0415 in May 2020) do not consistently follow the trend of REAs returns (e.g., 0.0381), indicating minimal small cap exposure. 
+REA, as a growth stock, has insignificant HML spikes (e.g., 0.0504 in May 2020) show weak alignment to the returns of REA, alluding to REA having limited stock sensitivity. 
+Implications
+These results are derived from data patterns used from the Fama French Factor theory (Fama & French 1993), which connect significant coefficients to risk exposure. A significant β can showcase REA’s returns are driven by the market, requiring to take hedging strategies. An insignificant SMB and HML reflect REA’s large capital, growth and risk strategies. An insignificant α would indicate fair stock pricing, whilst a significant would signal unique returns, driving investment appeal. 
+Largest Significant Coefficient 
+By analysing the results, β shows the largest significant coefficient, given REA’s alignment to the market index. A β of 1.2 indicates REA is more volatile than the market, amplifying gain during market upswings (e.g, 0.0938 in May 2020 vs 0.0110) but exposing itself to a larger decline during downturns (e.g., -0.2238 in March 2020). For REA, the company has an elevated systematic risk, building a careful portfolio, allocating control for growth while mitigating volatility risk. 
+Comparison
+Fama French’s three factor model generally outperforms the Capital Asset Pricing Model (CAPM) for Australian stocks, as the SMB and HML add a contributing factor. CAPM’s R² for REA is around the 0.4 – 0.6 range, capturing market risk. The Fama French factor model portrays smaller residuals, on the other hand REA shows high volatility with a standard deviation of (0.03996) and kurtosis (2.168) suggesting these residuals increase during market shocks. Compared to CAPM, Fama French model better captures REA’s risk, improving their portfolio decisions though tech related residuals.   
+Conclusion
+REA’s significant B (1.2901) underscores its market driven volatility, increasing gains but enhancing losses, while insignificant SMB and HML align with REA’s large capital and growth. A significant α indicates outperformance, enhancing the attraction to invest in REA. These results can outline REA’s systematic risk, mitigating and evolving their risk strategies. Fama French’s high R² and reduced residuals compared to the CAPM R² (0.4393) offer an insightful risk profile, informing balanced portfolio decision for REA.
+
+# Task 3 
+
+## 3.1 Equally Weighted Portfolios
+
+#### Descriptive Statistics 
+
+```{r}
+Stocks = read_excel("Stock_Prices.xlsx")
+Stocks$Date = as.Date(Stocks$Date, format = "%d/%m/%Y")
+data_p = Stocks[1:11]
+
+d1_ret = as.data.frame(lapply(data_p[, -1], function(x) exp(diff(log(x))) -1 ))
+d1_ret = na.omit(d1_ret)
+
+Cov_Stocks = cov(d1_ret[,-1])
+
+statistics = data.frame(
+  Stock = colnames(d1_ret),
+  Mean = sapply(d1_ret, mean),
+  SD = sapply(d1_ret, sd),
+  Skewness = sapply(d1_ret, skewness),
+  Kurtosis = sapply(d1_ret, kurtosis)
+)
+
+print(statistics)
+print(Cov_Stocks)
+```
+
+#### Returns
+
+```{r}
+d1_ret2 = cbind(Date = Stocks[-1, 1], d1_ret, Rf = Stocks[-1, 12])
+
+c1 = ncol(d1_ret)
+row1 = nrow(d1_ret)
+
+mu1 = colMeans(d1_ret) 
+varc1 = cov(d1_ret)
+w1 = rep(1, ncol(d1_ret))/ncol(d1_ret)
+ret_p = t(w1) %*% mu1
+riskp1 = t(w1) %*% varc1 %*% w1
+
+op1=options()
+options("scipen"=999)
+ret_p
+riskp1
+
+weekly_return = as.numeric(ret_p)
+weekly_sd = sqrt(as.numeric(riskp1))
+
+annual_return = weekly_return * 52
+annual_sd = weekly_sd * sqrt(52)
+
+print(weekly_return)
+print(weekly_sd)
+print (annual_return)
+print(annual_sd)
+```
+### Discussion
+
+The provided dataset offers the descriptive statistics for ten ASX listed companies. REA, CBA, BHP, CSL, WES, GMG, COL, WTC, BXB and TLS. These metrics showcase insights to volatility, return and portfolio diversification potential. 
+•	The Covariance Matrix shows how the stock returns move together. Most covariances are positive, indicating stock are moving in the same direction. However, BHP and COL portray a small negative covariance between them both (-0.000042) implying diversification potential. 
+•	The mean return portrays the company’s WTC (0.00853) and WES (0.00604) have the highest average daily returns, indicating strong performances, while TLS (0.00071) and COL (0.00123) shows negative returns, implying an underwhelming performance. 
+•	Volatility of a company’s stock is captured by standard deviation. WES (0.08791) and WTC (0.06815) are the most volatile, while TLS (0.02382) and COL (0.02641) are the least volatile, offering more stability.
+•	CSL (-0.49), and CBA (-0.52) have negative skewness, indicating a more frequent, larger negative returns. However, WES (2.10) and WTC (0.66) show positive skewness, giving a potential factor for larger gains and an attraction for investors.
+•	The Kurtosis summary shows WES (28.80) and WTC (11.01) as the highest, indicating fat tails and extreme return risks and events, highlighting potential for large return swing. CSL (5.19) and BHP (4.58) have the lowest swings, suggesting a normal distribution compared to the rest of the stocks. 
+Comparing these metrics, WTC high volatility and negative return contrast with WES’s strong performance, while TSL and COL are more stable but offer lower returns. The slight negative covariance between BHP and COL provides a diversification advantage. These insights inform a strategic portfolio, balancing risk and reward.
+
+
+### 3.2 Efficient Frontier 
+
+```{r}
+increments = 200
+
+sigma.p = rep(NA,increments)
+mu.p = seq(min(mu1) + min(mu1) * 0.01, max(mu1), length = 200)
+covmat = varc1
+
+weights2 = matrix(0, nrow = increments, ncol = ncol(d1_ret))
+colnames(weights2) = colnames(d1_ret)
+
+for (i in 1:increments) {
+p2 = portfolio.optim(x = as.matrix(d1_ret), pm = mu.p[i])
+sigma.p[i] = p2$ps
+weights2[i, ] = p2$pw
+}
+
+port2 = data.frame(weights2, sigma.p, mu.p)
+
+min_var_p = port2[which.min(port2$sigma.p), ]
+
+
+p2 = ggplot(port2, aes(x = sigma.p, y = mu.p))
+p2 + geom_path(colour = "dark blue", size = 2, lty = 2) + geom_point(aes(min_var_p$sigma.p,
+min_var_p$mu.p), shape = 8, size = 8, colour = "dark green") + theme_economist() +
+labs(x = "Risk", y = "Return", title = "Efficient Frontier (10 Assets)") + annotate("text",
+label = "Min Var Portfolio", x = min_var_p$sigma.p + 0.002, y = min_var_p$mu.p -
+0.0001, size = 4, colour = "red") + geom_hline(yintercept = min_var_p$mu.p,
+col = "orange", size = 2)
+```
+### 3.3 Tangency Portfolio
+
+```{r}
+data_p2 = zoo(d1_ret2[, 2:11], order.by = as.Date(d1_ret2$Date, "%d/%m/%Y"))
+
+port = portfolio.spec(assets = colnames(data_p2))
+port = add.constraint(port, type = "long_only")
+port_msd = add.objective(port, type = "risk", name = "StdDev")
+
+minvar1 = optimize.portfolio(data_p2, port_msd, optimize_method = "ROI", trace = TRUE)
+plot(minvar1, risk.col = "StdDev", main = "Mean-Variance Portfolio", chart.assets = TRUE)
+
+minvar_ef = create.EfficientFrontier(R = data_p2, portfolio = port_msd, type = "mean-sd", n.portfolios = 500)
+chart.EfficientFrontier(minvar_ef, match.col = "StdDev", type = "l", tangent.line = FALSE, chart.assets = TRUE)
+
+data_p2 = as.timeSeries(data_p2)
+
+pspec = portfolioSpec()
+setNFrontierPoints(pspec) = 500
+
+boxconstraints = c("minW[1:10]=0.01", "maxW[1:10]=1")
+eff_front2 = portfolioFrontier(data_p2, spec = pspec, constraints = boxconstraints)
+plot(eff_front2, c(1,2,4,5,6))
+
+
+tg_box = tangencyPortfolio(data = data_p2, spec = pspec, constraints = boxconstraints)
+tg_box
+
+mu_rf = mean(d1_ret2$rf/100)
+
+sharpe = (mu.p - mu_rf)/sigma.p
+port2$sharpe = sharpe
+
+sharpe_mx = port2[which.max(port2$sharpe), ]
+
+plot(sigma.p, mu.p, type = "l", lty = 3, lwd = 3, col = "blue",
+     xlab = "Risk (StdDev)", ylab = "Return", 
+     main = "Efficient Frontier with Tangency Portfolio",
+     xlim = c(0, max(port2$sigma.p) + 0.001),
+     ylim = c(0, max(port2$mu.p) + 0.001))
+points(min_var_p$sigma.p, min_var_p$mu.p, cex = 2, pch = 8, col = "darkgreen")
+points(0, mu_rf, cex = 4, pch = "*", col = "black")
+points(sharpe_mx$sigma.p, sharpe_mx$mu.p, cex = 2, pch = 15, col = "red")
+
+slope_cml = sharpe_mx$sharpe
+abline(a = mu_rf, b = slope_cml, col = "red", lwd = 2)
+points(sharpe_mx$sigma.p, sharpe_mx$mu.p, cex = 4, pch = "+", col = "orange")
+```
+
